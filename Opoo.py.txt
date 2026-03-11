@@ -1,0 +1,231 @@
+# odoo.py
+"""
+OdooAPI - Interface Python XML-RPC API Odoo
+Compatible avec Main.py fourni (console, sans Tkinter)
+"""
+
+import xmlrpc.client
+import base64
+from typing import Any, Dict, List, Optional, Union
+
+class OdooAPI:
+    def __init__(self, url: str, db: str, debug: bool = False):
+        self.url = url.rstrip("/")
+        self.db = db
+        self.uid: Optional[int] = None
+        self.password: Optional[str] = None
+        self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
+        self._models = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
+        self.debug = debug
+
+    # -------------------------
+    # Internal executor helper
+    # -------------------------
+    def _execute(self, model: str, method: str,
+                 args: Optional[List[Any]] = None,
+                 kwargs: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Wrapper safe pour execute_kw.
+        - args doit être une liste (ex: [] pour domain vide)
+        - kwargs est le dictionnaire d'options (ex: {"fields": [...], "limit":1})
+        """
+        if not self.is_connected():
+            raise RuntimeError("Non connecté à Odoo (appel _execute impossible).")
+        args = args or []
+        kwargs = kwargs or {}
+        if self.debug:
+            print(f"[DEBUG] execute_kw -> model:{model} method:{method} args:{args} kwargs:{kwargs}")
+        try:
+            return self._models.execute_kw(self.db, self.uid, self.password, model, method, args, kwargs)
+        except xmlrpc.client.Fault as f:
+            # Affiche le message d'erreur renvoyé par Odoo
+            print(f"[OdooAPI] XML-RPC Fault: {f}")
+            raise
+        except Exception as e:
+            print(f"[OdooAPI] Erreur RPC: {type(e).__name__} {e}")
+            raise
+
+    # -------------------------
+    # Connexion / session
+    # -------------------------
+    def connect(self, login: str, password: str) -> bool:
+        try:
+            uid = self._common.authenticate(self.db, login, password, {})
+            if uid:
+                self.uid = uid
+                self.password = password
+                if self.debug:
+                    print(f"[DEBUG] Auth OK uid={uid}")
+                return True
+            return False
+        except Exception as e:
+            print(f"[OdooAPI] Erreur connexion : {type(e).__name__} {e}")
+            return False
+
+    def disconnect(self):
+        self.uid = None
+        self.password = None
+
+    def is_connected(self) -> bool:
+        return self.uid is not None and self.password is not None
+
+    def get_odoo_version(self) -> Dict[str, Any]:
+        try:
+            return self._common.version()
+        except Exception as e:
+            print(f"[OdooAPI] Erreur get_odoo_version : {e}")
+            return {}
+
+    # -------------------------
+    # Helper générique read
+    # -------------------------
+    def read(self, model: str, domain: Optional[List[Any]] = None,
+             fields: Optional[List[str]] = None, limit: Optional[int] = None,
+             order: Optional[str] = None) -> List[Dict[str, Any]]:
+        domain = domain or []
+        params: Dict[str, Any] = {}
+        if fields:
+            params["fields"] = fields
+        if limit:
+            params["limit"] = limit
+        if order:
+            params["order"] = order
+        try:
+            return self._execute(model, "search_read", [domain], params)
+        except Exception:
+            return []
+
+    # -------------------------
+    # F2 - Fiche entreprise
+    # -------------------------
+    def get_company_info(self) -> Dict[str, Any]:
+        if not self.is_connected():
+            return {}
+        fields = ["name", "street", "street2", "city", "zip",
+                  "phone", "mobile", "email", "website", "logo"]
+        try:
+            companies = self._execute("res.company", "search_read", [[]], {"fields": fields, "limit": 1})
+            if not companies:
+                return {}
+            c = companies[0]
+            # Décoder le logo si présent
+            if c.get("logo"):
+                try:
+                    c["logo_bytes"] = base64.b64decode(c["logo"])
+                except Exception:
+                    c["logo_bytes"] = None
+            else:
+                c["logo_bytes"] = None
+            return c
+        except Exception:
+            return {}
+
+    # -------------------------
+    # F3 - Produits
+    # -------------------------
+    def get_products(self) -> List[Dict[str, Any]]:
+        if not self.is_connected():
+            return []
+        fields = ["name", "default_code", "list_price",
+                  "qty_available", "uom_id", "categ_id",
+                  "description_sale", "image_1920", "type"]
+        try:
+            products = self._execute("product.product", "search_read", [[["active", "=", True]]], {"fields": fields, "limit": 500})
+            for p in products:
+                if p.get("image_1920"):
+                    try:
+                        p["image_bytes"] = base64.b64decode(p["image_1920"])
+                    except Exception:
+                        p["image_bytes"] = None
+                else:
+                    p["image_bytes"] = None
+            return products
+        except Exception:
+            return []
+
+    # -------------------------
+    # F4 - Ordres de fabrication
+    # -------------------------
+    def get_manufacturing_orders(self, state_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self.is_connected():
+            return []
+        domain: List[Any] = []
+        if state_filter:
+            domain = [["state", "=", state_filter]]
+        fields = ["name", "product_id", "product_qty", "qty_producing",
+                  "date_planned_start", "state", "origin",
+                  "product_uom_id", "bom_id"]
+        try:
+            return self._execute("mrp.production", "search_read", [domain], {"fields": fields, "order": "date_planned_start desc", "limit": 500})
+        except Exception:
+            return []
+
+    # -------------------------
+    # F5 - Mise à jour quantité produite
+    # -------------------------
+    def update_qty_producing(self, order_id: int, qty: float) -> bool:
+        if not self.is_connected():
+            print("[OdooAPI] Non connecté.")
+            return False
+        try:
+            orders = self._execute("mrp.production", "search_read", [[["id", "=", order_id]]], {"fields": ["state", "product_qty", "qty_producing"]})
+            if not orders:
+                print(f"[OdooAPI] OF {order_id} introuvable.")
+                return False
+            order = orders[0]
+            current_state = order.get("state", "")
+            product_qty = float(order.get("product_qty", 0) or 0)
+
+            if current_state not in ("confirmed", "progress"):
+                print(f"[OdooAPI] État '{current_state}' non modifiable.")
+                return False
+
+            # Si confirmé, confirmer (idempotent)
+            if current_state == "confirmed":
+                try:
+                    self._execute("mrp.production", "action_confirm", [[order_id]])
+                except Exception:
+                    # Certains workflows peuvent déjà être confirmés ; on ignore l'erreur ici
+                    if self.debug:
+                        print("[DEBUG] action_confirm a échoué ou n'était pas nécessaire.")
+
+            # Écrire la quantité produite
+            self._execute("mrp.production", "write", [[order_id], {"qty_producing": qty}])
+
+            # Si quantité complète, marquer comme fait
+            if qty >= product_qty:
+                try:
+                    self._execute("mrp.production", "button_mark_done", [[order_id]])
+                except Exception:
+                    # Si l'appel échoue, on affiche un message mais on considère l'opération comme partiellement réussie
+                    print("[OdooAPI] Impossible d'appeler button_mark_done (vérifier les droits / workflow).")
+            return True
+        except Exception as e:
+            print(f"[OdooAPI] Erreur update_qty_producing : {type(e).__name__} {e}")
+            return False
+
+# -------------------------
+# Test rapide (python odoo.py)
+# -------------------------
+if __name__ == "__main__":
+    # Exemple de test local (adapter URL/BDD/login/password)
+    api = OdooAPI("http://localhost:8069", "demo", debug=True)
+    print("=== Connexion ===")
+    if api.connect("admin", "admin"):
+        print(f"OK — UID {api.uid}")
+        print("Version :", api.get_odoo_version().get("server_version"))
+        print("\n=== Entreprise ===")
+        c = api.get_company_info()
+        print("Company:", c.get("name"), "| email:", c.get("email"))
+        print("\n=== Produits (3) ===")
+        prods = api.get_products()
+        print(f"  {len(prods)} produits")
+        for p in prods[:3]:
+            print(f"  - {p.get('name')} | {p.get('list_price')}€")
+        print("\n=== OF (3) ===")
+        ofs = api.get_manufacturing_orders()
+        print(f"  {len(ofs)} OF")
+        for o in ofs[:3]:
+            print(f"  - {o.get('name')} | {o.get('state')}")
+    else:
+        print("Échec connexion.")

@@ -1,0 +1,447 @@
+"""
+main.py - Application Console – Opérateur de Production
+Module 04c - Langage Python / Projet ODOO
+Fonctions : F1 Connexion | F2 Entreprise | F3 Produits | F4 OF | F5 Mise à jour OF
+"""
+
+import os
+import sys
+from Odoo import OdooAPI
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CONFIGURATION SERVEUR
+# ═══════════════════════════════════════════════════════════════════════════════
+ODOO_URL      = "http://localhost:8069"
+ODOO_DB       = "bd_odoo"
+ODOO_LOGIN    = "test@test.com"
+ODOO_PASSWORD = "azerty12345"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  COULEURS ANSI
+# ═══════════════════════════════════════════════════════════════════════════════
+class C:
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    DIM     = "\033[2m"
+    CYAN    = "\033[96m"
+    GREEN   = "\033[92m"
+    YELLOW  = "\033[93m"
+    RED     = "\033[91m"
+    WHITE   = "\033[97m"
+
+STATE_FR = {
+    "draft":     ("Brouillon",   C.DIM),
+    "confirmed": ("Confirmé",    C.CYAN),
+    "progress":  ("En cours",    C.YELLOW),
+    "to_close":  ("À clôturer",  C.YELLOW),
+    "done":      ("Fait",        C.GREEN),
+    "cancel":    ("Annulé",      C.RED),
+}
+
+STATE_OPTIONS = {
+    "1": (None,        "Tous"),
+    "2": ("confirmed", "Confirmé"),
+    "3": ("progress",  "En cours"),
+    "4": ("done",      "Fait"),
+    "5": ("cancel",    "Annulé"),
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HELPERS D'AFFICHAGE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
+
+def line(char="─", width=70, color=C.DIM):
+    print(f"{color}{char * width}{C.RESET}")
+
+def header(title: str):
+    clear()
+    line("═", 70, C.CYAN)
+    print(f"{C.CYAN}{C.BOLD}  ⚙  ERP ODOO  ─  {title}{C.RESET}")
+    line("═", 70, C.CYAN)
+    print()
+
+def success(msg): print(f"\n{C.GREEN}✔  {msg}{C.RESET}\n")
+def error(msg):   print(f"\n{C.RED}✘  {msg}{C.RESET}\n")
+def info(msg):    print(f"{C.CYAN}ℹ  {msg}{C.RESET}")
+def warn(msg):    print(f"{C.YELLOW}⚠  {msg}{C.RESET}")
+
+def prompt(msg: str, default: str = "") -> str:
+    hint = f" [{default}]" if default else ""
+    val = input(f"{C.BOLD}{C.WHITE}{msg}{hint} : {C.RESET}").strip()
+    return val if val else default
+
+def confirm(msg: str) -> bool:
+    rep = input(f"{C.YELLOW}{msg} (o/n) : {C.RESET}").strip().lower()
+    return rep in ("o", "oui", "y", "yes")
+
+def col(text, width, align="left", color=""):
+    text = str(text)
+    if len(text) > width:
+        text = text[:width - 1] + "…"
+    padded = text.rjust(width) if align == "right" else \
+             text.center(width) if align == "center" else \
+             text.ljust(width)
+    return f"{color}{padded}{C.RESET}"
+
+def table_row(*cells):
+    print("  " + "  ".join(cells))
+
+def wait():
+    input(f"\n{C.DIM}Appuyez sur Entrée pour continuer…{C.RESET}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  F0 – CONFIGURATION SERVEUR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def view_server_config(api: OdooAPI) -> OdooAPI:
+    """Permet de reconfigurer l'URL et la BDD du serveur Odoo."""
+    header("Configuration Serveur")
+
+    print(f"  Paramètres actuels :")
+    print(f"  {C.CYAN}URL{C.RESET} : {api.url}")
+    print(f"  {C.CYAN}BDD{C.RESET} : {api.db}\n")
+
+    print(f"  {C.DIM}Exemples d'URL :{C.RESET}")
+    print(f"  {C.DIM}  http://172.18.0.3:8069{C.RESET}")
+    print(f"  {C.DIM}  http://192.168.1.50:8012{C.RESET}\n")
+
+    url = prompt("URL du serveur Odoo", api.url)
+    db  = prompt("Nom de la base de données", api.db)
+
+    print(f"\n{C.DIM}Test de connexion au serveur…{C.RESET}")
+    new_api = OdooAPI(url, db)
+    try:
+        version = new_api.get_odoo_version()
+        success(f"Serveur Odoo {version.get('server_version','?')} détecté !")
+        info(f"URL : {url}  |  BDD : {db}")
+    except Exception as e:
+        error(f"Impossible de joindre le serveur.\n  Détail : {e}")
+        warn("Vérifiez l'URL et que le serveur Docker est bien démarré.")
+        if not confirm("Garder quand même ces paramètres ?"):
+            wait()
+            return api
+
+    wait()
+    return new_api
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VUES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def view_login(api: OdooAPI) -> bool:
+    """F1 – Connexion à l'ERP Odoo."""
+    header("F1 – Connexion")
+    print(f"  Serveur : {C.CYAN}{api.url}{C.RESET}")
+    print(f"  Base    : {C.CYAN}{api.db}{C.RESET}\n")
+
+    login    = prompt("Identifiant", ODOO_LOGIN)
+    password = prompt("Mot de passe", ODOO_PASSWORD)
+
+    print(f"\n{C.DIM}Connexion en cours…{C.RESET}")
+    if api.connect(login, password):
+        success(f"Connecté en tant que '{login}' (UID {api.uid})")
+        version = api.get_odoo_version()
+        info(f"Odoo {version.get('server_version', '?')}")
+        wait()
+        return True
+    else:
+        error("Identifiant ou mot de passe incorrect.")
+        wait()
+        return False
+
+
+def view_company(api: OdooAPI):
+    """F2 – Fiche entreprise."""
+    header("F2 – Fiche Entreprise")
+    print(f"{C.DIM}Récupération des données…{C.RESET}")
+
+    data = api.get_company_info()
+    if not data:
+        error("Aucune donnée disponible.")
+        wait()
+        return
+
+    clear()
+    header("F2 – Fiche Entreprise")
+    line()
+    print(f"  {C.BOLD}{C.WHITE}{data.get('name', '—')}{C.RESET}\n")
+
+    fields = [
+        ("Adresse",   f"{data.get('street','—')}, {data.get('city','—')} {data.get('zip','')}"),
+        ("Téléphone", data.get("phone")   or "—"),
+        ("Mobile",    data.get("mobile")  or "—"),
+        ("Email",     data.get("email")   or "—"),
+        ("Site Web",  data.get("website") or "—"),
+    ]
+    for label, value in fields:
+        print(f"  {C.CYAN}{label:<12}{C.RESET} {value}")
+
+    line()
+    wait()
+
+
+def view_products(api: OdooAPI):
+    """F3 – Liste des produits."""
+    header("F3 – Catalogue Produits")
+    print(f"{C.DIM}Récupération des produits…{C.RESET}")
+    products = api.get_products()
+
+    if not products:
+        error("Aucun produit trouvé.")
+        wait()
+        return
+
+    while True:
+        header("F3 – Catalogue Produits")
+        search = prompt("Recherche (laisser vide pour tout afficher)", "").lower()
+
+        filtered = [p for p in products
+                    if not search
+                    or search in p["name"].lower()
+                    or search in str(p.get("default_code") or "").lower()]
+
+        print(f"\n  {C.BOLD}{len(filtered)} produit(s){C.RESET}\n")
+
+        line("─", 72, C.DIM)
+        table_row(
+            col("Réf.",      8,  color=C.CYAN + C.BOLD),
+            col("Nom",       30, color=C.CYAN + C.BOLD),
+            col("Prix €",    8,  "right", C.CYAN + C.BOLD),
+            col("Stock",     7,  "right", C.CYAN + C.BOLD),
+            col("Catégorie", 14, color=C.CYAN + C.BOLD),
+        )
+        line("─", 72, C.DIM)
+
+        for p in filtered:
+            stock_color = C.GREEN if p["qty_available"] > 0 else C.RED
+            table_row(
+                col(p.get("default_code") or "—",    8),
+                col(p["name"],                       30),
+                col(f"{p['list_price']:.2f}",         8, "right", C.YELLOW),
+                col(f"{p['qty_available']:.0f}",      7, "right", stock_color),
+                col(p["categ_id"][1] if p.get("categ_id") else "—", 14, color=C.DIM),
+            )
+
+        line("─", 72, C.DIM)
+        print(f"\n  {C.DIM}Entrez une référence pour voir le détail, ou 'q' pour quitter.{C.RESET}")
+        choice = prompt("Réf. ou q").lower()
+
+        if choice in ("q", ""):
+            break
+
+        prod = next((p for p in filtered
+                     if str(p.get("default_code", "")).lower() == choice), None)
+        if not prod:
+            warn("Référence introuvable.")
+            continue
+
+        header(f"F3 – Détail : {prod['name']}")
+        line()
+        for label, value in [
+            ("Référence",   prod.get("default_code") or "—"),
+            ("Nom",         prod["name"]),
+            ("Prix",        f"{prod['list_price']:.2f} €"),
+            ("Stock",       f"{prod['qty_available']:.0f} unités"),
+            ("Catégorie",   prod["categ_id"][1] if prod.get("categ_id") else "—"),
+            ("Type",        prod.get("type") or "—"),
+            ("Description", str(prod.get("description_sale") or "—")[:120]),
+        ]:
+            print(f"  {C.CYAN}{label:<14}{C.RESET} {value}")
+        line()
+        wait()
+
+
+def view_manufacturing(api: OdooAPI):
+    """F4 + F5 – Ordres de fabrication."""
+    while True:
+        header("F4 – Ordres de Fabrication")
+
+        print(f"  {C.BOLD}Filtrer par état :{C.RESET}")
+        for k, (_, label) in STATE_OPTIONS.items():
+            print(f"    {C.CYAN}{k}{C.RESET}. {label}")
+        choice     = prompt("Choix", "1")
+        state_code, state_label = STATE_OPTIONS.get(choice, STATE_OPTIONS["1"])
+
+        header(f"F4 – OF — {state_label}")
+        print(f"{C.DIM}Récupération des OF…{C.RESET}")
+        orders = api.get_manufacturing_orders(state_code)
+
+        if not orders:
+            warn("Aucun ordre de fabrication trouvé.")
+            wait()
+            continue
+
+        print(f"\n  {C.BOLD}{len(orders)} OF trouvé(s){C.RESET}\n")
+
+        line("─", 80, C.DIM)
+        table_row(
+            col("#",          3,  color=C.CYAN + C.BOLD),
+            col("Référence", 14,  color=C.CYAN + C.BOLD),
+            col("Article",   28,  color=C.CYAN + C.BOLD),
+            col("Qté",        6,  "right", C.CYAN + C.BOLD),
+            col("Fab.",       6,  "right", C.CYAN + C.BOLD),
+            col("Date",      11,  color=C.CYAN + C.BOLD),
+            col("État",      12,  color=C.CYAN + C.BOLD),
+        )
+        line("─", 80, C.DIM)
+
+        for i, o in enumerate(orders, 1):
+            sc = o.get("state", "")
+            state_fr, state_color = STATE_FR.get(sc, (sc, ""))
+            date = str(o.get("date_planned_start", "—"))[:10]
+            table_row(
+                col(str(i),                                              3, color=C.DIM),
+                col(o["name"],                                          14),
+                col(o["product_id"][1] if o.get("product_id") else "—", 28),
+                col(f"{o.get('product_qty', 0):.0f}",                    6, "right", C.WHITE),
+                col(f"{o.get('qty_producing', 0):.0f}",                  6, "right", C.YELLOW),
+                col(date,                                               11, color=C.DIM),
+                col(state_fr,                                           12, color=state_color + C.BOLD),
+            )
+
+        line("─", 80, C.DIM)
+        print(f"\n  {C.DIM}Entrez le # d'un OF pour le mettre à jour (F5), 'r' pour rafraîchir, 'q' pour quitter.{C.RESET}")
+        action = prompt("Action").lower()
+
+        if action == "q":
+            break
+        elif action == "r":
+            continue
+        else:
+            try:
+                idx = int(action) - 1
+                if not (0 <= idx < len(orders)):
+                    raise IndexError
+            except (ValueError, IndexError):
+                warn("Numéro invalide.")
+                wait()
+                continue
+            _update_of(api, orders[idx])
+
+
+def _update_of(api: OdooAPI, order: dict):
+    """F5 – Mise à jour de la quantité produite d'un OF."""
+    sc = order.get("state", "")
+    state_fr, state_color = STATE_FR.get(sc, (sc, ""))
+
+    header(f"F5 – Mise à jour OF : {order['name']}")
+    line()
+
+    product_name = order["product_id"][1] if order.get("product_id") else "—"
+    total_qty    = order.get("product_qty", 0)
+    current_qty  = order.get("qty_producing") or 0
+
+    print(f"  {C.CYAN}{'Référence':<16}{C.RESET} {order['name']}")
+    print(f"  {C.CYAN}{'Article':<16}{C.RESET} {product_name}")
+    print(f"  {C.CYAN}{'Qté à produire':<16}{C.RESET} {total_qty:.0f}")
+    print(f"  {C.CYAN}{'Qté fabriquée':<16}{C.RESET} {current_qty:.0f}")
+    print(f"  {C.CYAN}{'Date prévue':<16}{C.RESET} {str(order.get('date_planned_start','—'))[:10]}")
+    print(f"  {C.CYAN}{'État actuel':<16}{C.RESET} {state_color}{C.BOLD}{state_fr}{C.RESET}")
+    line()
+
+    if sc not in ("confirmed", "progress"):
+        warn(f"Cet OF est en état '{state_fr}' — modification non disponible.")
+        wait()
+        return
+
+    qty_input = prompt(f"Nouvelle quantité fabriquée (sur {total_qty:.0f})",
+                       str(int(current_qty)))
+    try:
+        qty = float(qty_input.replace(",", "."))
+        if qty < 0:
+            raise ValueError
+    except ValueError:
+        error("Valeur invalide. Saisissez un nombre positif.")
+        wait()
+        return
+
+    if qty >= total_qty:
+        warn(f"Quantité complète ({qty:.0f}/{total_qty:.0f}) → l'OF passera en état FAIT.")
+    else:
+        info(f"OF passera en état EN COURS ({qty:.0f}/{total_qty:.0f}).")
+
+    if not confirm("Confirmer la mise à jour ?"):
+        print(f"{C.DIM}Opération annulée.{C.RESET}")
+        wait()
+        return
+
+    print(f"\n{C.DIM}Mise à jour en cours…{C.RESET}")
+    ok = api.update_qty_producing(order["id"], qty)
+
+    if ok:
+        success("Ordre de fabrication mis à jour avec succès !")
+    else:
+        error("La mise à jour a échoué. Vérifiez les logs du serveur.")
+    wait()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MENU PRINCIPAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def main_menu(api: OdooAPI):
+    while True:
+        header("Menu Principal")
+
+        connected = api.is_connected()
+        status = f"{C.GREEN}● Connecté (UID {api.uid}){C.RESET}" if connected \
+                 else f"{C.RED}● Non connecté{C.RESET}"
+
+        print(f"  Serveur : {C.CYAN}{api.url}{C.RESET}  |  BDD : {C.CYAN}{api.db}{C.RESET}")
+        print(f"  {status}\n")
+
+        options = [
+            ("S",  "Configurer le serveur (URL / BDD)",  True),
+            ("F1", "Connexion à l'ERP Odoo",             True),
+            ("F2", "Fiche entreprise",                   connected),
+            ("F3", "Liste des produits",                 connected),
+            ("F4", "Ordres de Fabrication (+ F5)",       connected),
+            ("Q",  "Quitter",                            True),
+        ]
+        for key, label, available in options:
+            if available:
+                print(f"  {C.CYAN}{C.BOLD}{key}{C.RESET}  {label}")
+            else:
+                print(f"  {C.DIM}{key}  {label}  (connexion requise){C.RESET}")
+
+        print()
+        choice = prompt("Votre choix").upper()
+
+        if choice == "S":
+            api = view_server_config(api)
+            if api.is_connected():
+                api.disconnect()
+        elif choice == "F1":
+            view_login(api)
+        elif choice in ("F2", "F3", "F4") and not connected:
+            warn("Vous devez d'abord vous connecter (F1).")
+            wait()
+        elif choice == "F2":
+            view_company(api)
+        elif choice == "F3":
+            view_products(api)
+        elif choice == "F4":
+            view_manufacturing(api)
+        elif choice == "Q":
+            print(f"\n{C.CYAN}Au revoir !{C.RESET}\n")
+            sys.exit(0)
+        else:
+            warn("Choix invalide.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POINT D'ENTRÉE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    api = OdooAPI(ODOO_URL, ODOO_DB)
+    try:
+        main_menu(api)
+    except KeyboardInterrupt:
+        print(f"\n\n{C.DIM}Interruption.{C.RESET}\n")
+        sys.exit(0)
