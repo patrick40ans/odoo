@@ -1,7 +1,7 @@
-#Application Console – Opérateur de Production (Odoo)#
+##Application Console – Opérateur de Production (Odoo)
 Application console Python permettant d’interagir avec un serveur Odoo : connexion, consultation des données, produits et ordres de fabrication.
 
-#Fonctionnalités
+##Fonctionnalités
 'Connexion (F1) : authentification et affichage de la version Odoo.'
 
 'Fiche entreprise (F2) : adresse, contact, site web.'
@@ -12,14 +12,14 @@ Application console Python permettant d’interagir avec un serveur Odoo : conne
 
 Mise à jour OF (F5) : modification de la quantité produite, changement d’état automatique.
 
-#Architecture
+##Architecture
 Code
 .
 ├── main.py
 └── Odoo/
     └── OdooAPI.py
 
-#Installation
+##Installation
 bash
 git clone https://github.com/<utilisateur>/<repo>.git
 cd <repo>
@@ -27,7 +27,7 @@ python main.py
 Configuration
 Modifier dans main.py :
 
-#Mainmenu
+##Mainmenu
 S   Configurer le serveur
 F1  Connexion
 F2  Fiche entreprise
