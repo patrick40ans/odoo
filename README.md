@@ -1,4 +1,4 @@
-#Application Console – Opérateur de Production (Odoo)
+#Application Console – Opérateur de Production (Odoo)#
 Application console Python permettant d’interagir avec un serveur Odoo : connexion, consultation des données, produits et ordres de fabrication.
 
 #Fonctionnalités
